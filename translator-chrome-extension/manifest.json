@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Translator Chrome Extension",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.jk-daily.co.kr/news/adminArticleIntegration.html",
+        "https://www.jk-daily.co.kr/news/adminArticleWriteForm.html*"
+      ],
+      "js": ["content-script.js"],
+      "all_frames": true
+    }
+  ],
+  "permissions": ["scripting", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "icons": {
+    "64": "favicon.svg"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Translator Chrome Extension",
+  "name": "purple-translator-extension",
   "version": "0.1.0",
   "action": {
     "default_popup": "popup.html"
@@ -21,6 +21,8 @@
   },
   "options_page": "options.html",
   "icons": {
-    "64": "favicon.svg"
+    "16": "purple_favicon-3.png",
+    "32": "purple_favicon-2.png",
+    "48": "purple_favicon-1.png"
   }
 }

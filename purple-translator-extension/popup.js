@@ -1,8 +1,14 @@
-const FULL_PROMPT = `당신은 한국어 기사 교정 전문가입니다.
-AI가 기사의 목적/스타일에 맞게 자연스럽게 한국어 기사로 구성할 수 있도록 안내합니다.
+// 마크다운 줄바꿈 옵션 활성화
+window.marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
+
+const FULL_PROMPT = `
 
 **기사 작성 시 주의할 점**
 - 제목에는 "일본" 대신 '日'을 사용
+- 한일 이라는 단어는 유지
 - 문장 구조는 한국 시점에서 써야 함 (예: "일본 현지에서", "일본 정부는" 등)
 
 ■ 기사 선정 및 rewrite 관련 지침
@@ -52,19 +58,18 @@ AI가 기사의 목적/스타일에 맞게 자연스럽게 한국어 기사로 �
 ※ 제목과 본문에 일본 기사에 등장하는 고유명사(예: 시설명, 작품명, 건축물 등) 를 한국어 뜻(일본어 원문) (예: 太陽の塔 → 태양의 탑(太陽의 탑)) 형식으로 표기해줘. 위치는 필요없어
 `;
 
-console.log("popup.js loaded");
-
 function fetchArticleContentFromContentScript(callback) {
-  console.log("call send message");
   if (window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
     chrome.runtime.sendMessage({ type: "GET_ARTICLE_CONTENT" }, (res) => {
-      console.log("response");
       if (res && res.title && res.body) {
         console.log("[AI 교정] 읽은 기사 제목:", res.title);
         console.log("[AI 교정] 읽은 기사 본문:", res.body);
         callback(res.title, res.body);
       } else {
         console.warn("[AI 교정] 기사 본문을 가져오지 못했습니다.");
+        setCorrectionResult(
+          "⚠️ 기사 본문을 가져오지 못했습니다.\n\n기사 작성 폼이 열려 있어야 합니다."
+        );
       }
     });
   }
@@ -77,19 +82,50 @@ function fillTextareaWithArticle(title, body) {
   }
 }
 
-function showArticleContent(title, body) {
-  const contentDiv = document.querySelector("#article-content");
-  if (contentDiv) {
-    contentDiv.textContent = `${title} ${body}`;
+function setCorrectionResult(markdown, isSave = true) {
+  const resultDiv = document.getElementById("ai-result");
+  resultDiv.innerHTML = window.marked.parse(markdown);
+  // 결과를 chrome.storage.local에 저장
+  if (isSave && chrome && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.set({ lastCorrectionResult: markdown });
   }
 }
 
-function setCorrectionResult(text) {
-  const resultDiv = document.getElementById("correction-result");
-  if (resultDiv) resultDiv.textContent = text;
-}
-
 async function fetchOpenAICorrection(apiKey, prompt, userInput) {
+  const system_prompt = `
+    당신은 한국어 기사 교정 전문가입니다.
+번역한 내용이 번역 요청사항에 맞게 잘 번역되었는지 확인해서 잘못된 부분을 교정하고 교정된 부분에 대한 이유를 함께 반환해줘.
+AI가 기사의 목적/스타일에 맞게 자연스럽게 한국어 기사로 구성할 수 있도록 안내합니다.
+`;
+  const user_prompt = `
+
+아래 교정 요청사항을 참고해서 번역 결과를 교정해주고, 교정 된 부분은 이유와 함께 한칸씩 띄워서 보기좋게 반환해줘
+각 항목, 교정 전/후, 이유 등을 마크다운 리스트(-, *), 굵게(**), 코드(\), 인용(>) 등으로 감싸주고 각 항목을 구분해줘
+
+[교정 요청사항]
+${prompt}
+
+[번역 결과]
+${userInput}
+
+[교정 된 부분]
+1. example1
+- 교정 전:
+- 교정 후:
+- 이유:
+
+---
+
+2. example2
+- 교정 전:
+- 교정 후:
+- 이유:
+
+---
+
+...
+
+`;
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -99,8 +135,8 @@ async function fetchOpenAICorrection(apiKey, prompt, userInput) {
     body: JSON.stringify({
       model: "gpt-4o",
       messages: [
-        { role: "system", content: prompt },
-        { role: "user", content: userInput },
+        { role: "system", content: system_prompt },
+        { role: "user", content: user_prompt },
       ],
     }),
   });
@@ -139,67 +175,51 @@ function sendHighlightToContentScript(feedback) {
     }
   });
 }
+function showArticlePreview(text) {
+  const previewDiv = document.getElementById("article-preview");
+  if (previewDiv) {
+    // 앞뒤 공백 제거, 줄바꿈 → 공백, 80자 제한
+    const summary = text.replace(/\s+/g, " ").trim().slice(0, 80);
+    previewDiv.textContent = summary;
+  }
+}
+function callAI() {
+  setCorrectionResult("로딩중");
+  getApiKey(async (apiKey) => {
+    if (!apiKey) {
+      console.log("[AI 교정] API Key 없음");
+      return setCorrectionResult("[AI 교정] API Key 없음");
+    }
+    try {
+      const value = getExtraInputValue();
+      showArticlePreview(value);
+      console.log("[AI 교정] fetchOpenAICorrection 시작");
+      const result = await fetchOpenAICorrection(apiKey, FULL_PROMPT, value);
+      console.log("[AI 교정] fetchOpenAICorrection 성공", result);
+      setCorrectionResult(result);
+      try {
+        const parsed = JSON.parse(result);
+        if (Array.isArray(parsed.highlights)) {
+          sendHighlightToContentScript(parsed.highlights);
+        }
+      } catch {}
+    } catch (e) {
+      console.log("[AI 교정] fetchOpenAICorrection 실패", e);
+      setCorrectionResult("[AI 교정] fetchOpenAICorrection 실패");
+    }
+  });
+}
 
 function handleCorrectionButton(options) {
   const button = document.getElementById("correction-btn");
   console.log(" button exist test");
   if (!button) return;
-  if (options.openAICall) {
-    button.onclick = async () => {
-      console.log("[AI 교정] 버튼 클릭됨");
-      const value = getExtraInputValue();
-      setCorrectionResult("로딩 중");
-      console.log("[AI 교정] openAICall 시작");
-      try {
-        const result = await options.openAICall(value);
-        console.log("[AI 교정] openAICall 성공", result);
-        setCorrectionResult(result);
-        try {
-          const parsed = JSON.parse(result);
-          if (Array.isArray(parsed.highlights)) {
-            sendHighlightToContentScript(parsed.highlights);
-          }
-        } catch {}
-      } catch (e) {
-        console.log("[AI 교정] openAICall 실패", e);
-        setCorrectionResult("[AI 교정] openAICall 실패");
-      }
-    };
-  } else if (options.onCorrection) {
+  if (options.onCorrection) {
     button.onclick = options.onCorrection;
   } else {
     button.onclick = async () => {
       console.log("[AI 교정] 버튼 클릭됨");
-      setCorrectionResult("[AI 교정] 버튼 클릭됨");
-      fetchArticleContentFromContentScript((title, body) => {
-        fillTextareaWithArticle(title, body);
-        getApiKey(async (apiKey) => {
-          if (!apiKey) {
-            console.log("[AI 교정] API Key 없음");
-            return setCorrectionResult("[AI 교정] API Key 없음");
-          }
-          try {
-            const value = getExtraInputValue();
-            console.log("[AI 교정] fetchOpenAICorrection 시작");
-            const result = await fetchOpenAICorrection(
-              apiKey,
-              FULL_PROMPT,
-              value
-            );
-            console.log("[AI 교정] fetchOpenAICorrection 성공", result);
-            setCorrectionResult(result);
-            try {
-              const parsed = JSON.parse(result);
-              if (Array.isArray(parsed.highlights)) {
-                sendHighlightToContentScript(parsed.highlights);
-              }
-            } catch {}
-          } catch (e) {
-            console.log("[AI 교정] fetchOpenAICorrection 실패", e);
-            setCorrectionResult("[AI 교정] fetchOpenAICorrection 실패");
-          }
-        });
-      });
+      callAI();
     };
   }
 }
@@ -209,16 +229,27 @@ function renderPopup(options = {}) {
   root.innerHTML = `
     <div>
       <textarea></textarea>
-      <button id="correction-btn">AI 교정 요청</button>
-      <div id="correction-result"></div>
-      <div id="article-content"></div>
+      <div class="ai-btn-row">
+        <button class="ai-btn" id="correction-btn">AI 교정 요청</button>
+        <button class="ai-btn ai-retry green" id="ai-retry-btn">재검토</button>
+      </div>
+      <div id="ai-result"></div>
+      <div class="article-preview" id="article-preview">텍스트 입력창에 교정할 내용을 넣고 버튼을 눌러도 됩니다.</div>
     </div>
   `;
   fetchArticleContentFromContentScript((title, body) => {
-    showArticleContent(title, body);
     fillTextareaWithArticle(title, body);
   });
   handleCorrectionButton(options);
+  const retryBtn = document.getElementById("ai-retry-btn");
+  if (retryBtn) {
+    retryBtn.onclick = async () => {
+      fetchArticleContentFromContentScript((title, body) => {
+        fillTextareaWithArticle(title, body);
+      });
+      callAI();
+    };
+  }
 }
 
 function getExtraInputValue() {
@@ -233,8 +264,18 @@ if (typeof module === "object" && typeof module.exports === "object") {
     getExtraInputValue,
     fetchArticleContentFromContentScript,
     fillTextareaWithArticle,
-    showArticleContent,
   };
+}
+
+// 팝업이 열릴 때 마지막 교정 결과 복원
+if (chrome && chrome.storage && chrome.storage.local) {
+  document.addEventListener("DOMContentLoaded", () => {
+    chrome.storage.local.get(["lastCorrectionResult"], (result) => {
+      if (result && result.lastCorrectionResult) {
+        setCorrectionResult(result.lastCorrectionResult);
+      }
+    });
+  });
 }
 
 document.addEventListener("DOMContentLoaded", () => {

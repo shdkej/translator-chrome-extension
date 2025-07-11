@@ -33,6 +33,16 @@ function loadApiKey(cb) {
   });
 }
 
+function showSaveMsg() {
+  const msg = document.getElementById("save-msg");
+  if (msg) {
+    msg.style.display = "block";
+    setTimeout(() => {
+      msg.style.display = "none";
+    }, 1500);
+  }
+}
+
 if (typeof module !== "undefined" && typeof module.exports === "object") {
   module.exports = { saveApiKey, loadApiKey };
 }
@@ -42,7 +52,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const saveBtn = document.getElementById("save-btn");
   if (saveBtn) {
     saveBtn.addEventListener("click", () => {
-      saveApiKey();
+      saveApiKey(() => {
+        setApiKeyInputValue(""); // 입력칸 비우기
+        showSaveMsg(); // 저장 메시지 표시
+      });
     });
   }
 });

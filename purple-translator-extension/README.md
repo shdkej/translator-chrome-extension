@@ -1,4 +1,4 @@
-# Translator Chrome Extension
+# Purple Translator Extension
 
 ## 소개
 
@@ -17,7 +17,7 @@
 1. 저장소 클론
    ```sh
    git clone <repo-url>
-   cd translator-chrome-extension
+   cd purple-translator-extension
    ```
 2. 의존성 설치
    ```sh

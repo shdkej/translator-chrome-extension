@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>AI 기사 교정</title>
+    <meta name="viewport" content="width=480, initial-scale=1.0" />
+    <link rel="stylesheet" href="popup.css" />
+    <style>
+        html,
+        body {
+            width: 480px;
+            height: 600px;
+            margin: 0;
+            padding: 0;
+            background: #f8f9fa;
+            font-family: 'Segoe UI', 'Apple SD Gothic Neo', Arial, sans-serif;
+        }
+
+        #popup-root {
+            padding: 24px;
+            position: relative;
+            height: 100%;
+            box-sizing: border-box;
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 18px;
+            right: 18px;
+            width: 36px;
+            height: 36px;
+            border: none;
+            background: none;
+            font-size: 2rem;
+            color: #888;
+            cursor: pointer;
+            z-index: 10;
+            transition: color 0.2s;
+        }
+
+        .close-btn:hover {
+            color: #d32f2f;
+        }
+
+        .ai-title {
+            font-size: 1.7rem;
+            font-weight: bold;
+            margin-bottom: 18px;
+            color: #3a3a3a;
+        }
+
+        .ai-btn-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .ai-btn {
+            flex: 1 1 0;
+            padding: 14px 0;
+            font-size: 1.1rem;
+            border-radius: 8px;
+            border: none;
+            background: #6c63ff;
+            color: #fff;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .ai-btn:hover {
+            background: #574fd6;
+        }
+
+        .ai-btn.green {
+            background: #2ecc40;
+        }
+
+        .ai-btn.green:hover {
+            background: #27ae38;
+        }
+
+        #ai-result {
+            font-size: 1.1em;
+            line-height: 1.7;
+            color: #222;
+            word-break: break-word;
+            background: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 200px;
+            box-shadow: 0 2px 8px #0001;
+            margin-top: 10px;
+            overflow-x: auto;
+        }
+
+        #ai-result h1,
+        #ai-result h2,
+        #ai-result h3 {
+            margin-top: 1.2em;
+            margin-bottom: 0.5em;
+            font-weight: bold;
+        }
+
+        #ai-result pre,
+        #ai-result code {
+            background: #f4f4f4;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: 'Fira Mono', 'Consolas', monospace;
+        }
+
+        #ai-result blockquote {
+            border-left: 4px solid #b4b4b4;
+            margin: 1em 0;
+            padding: 0.5em 1em;
+            color: #555;
+            background: #f9f9f9;
+        }
+
+        .article-preview {
+            margin: 10px 0 18px 0;
+            font-size: 0.98rem;
+            color: #555;
+            background: #f1f1f7;
+            border-radius: 6px;
+            padding: 8px 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 80px;
+            max-height: 200px;
+            padding: 14px 12px;
+            font-size: 1.05rem;
+            border: 1.5px solid #d1d5db;
+            border-radius: 8px;
+            background: #fafbfc;
+            color: #222;
+            resize: vertical;
+            box-sizing: border-box;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(60, 60, 100, 0.04);
+            transition: border 0.2s, box-shadow 0.2s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #6c63ff;
+            box-shadow: 0 2px 8px rgba(108, 99, 255, 0.10);
+            background: #f5f7ff;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="popup-root">
+        <button class="close-btn" id="close-popup" title="닫기">×</button>
+        <div class="ai-title">AI 기사 교정</div>
+        <button id="ai-correct-btn" class="ai-btn">AI 교정 요청</button>
+        <button id="ai-retry-btn" class="ai-btn ai-retry">재검토</button>
+    </div>
+    <script src="marked.min.js"></script>
+    <script type="module" src="popup.js"></script>
+</body>
+
+</html>

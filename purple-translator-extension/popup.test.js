@@ -297,3 +297,54 @@ describe("popup loading and error UX", () => {
     expect(resultDiv.textContent).toContain("에러");
   });
 });
+
+describe("Correction apply integration", () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="popup-root"></div>';
+  });
+
+  it("should replace only selected corrections in textarea when '반영하기' is clicked", () => {
+    // Arrange: textarea에 교정 전 텍스트가 있음
+    const initialText =
+      "이것은 교정 전 내용1이고, 또 다른 교정 전 내용2가 있습니다.";
+    // 교정 결과 예시 (실제 구현에서는 파싱 필요)
+    const corrections = [
+      { before: "교정 전 내용1", after: "교정 후 내용1" },
+      { before: "교정 전 내용2", after: "교정 후 내용2" },
+    ];
+    // renderPopup이 corrections 배열을 받아 체크박스와 반영하기 버튼을 렌더링한다고 가정
+    const { renderPopup } = require("./popup");
+    renderPopup({ corrections });
+    // textarea에 초기값 세팅
+    const textarea = document.querySelector("textarea");
+    textarea.value = initialText;
+    // 체크박스 노드들
+    const checkboxes = document.querySelectorAll("input[type='checkbox']");
+    // 첫 번째 교정만 선택
+    checkboxes[0].checked = true;
+    checkboxes[1].checked = false;
+    // '반영하기' 버튼 클릭
+    const applyBtn = document.getElementById("apply-corrections-btn");
+    applyBtn.click();
+    // Assert: 첫 번째 교정만 반영되어야 함
+    expect(textarea.value).toBe(
+      "이것은 교정 후 내용1이고, 또 다른 교정 전 내용2가 있습니다."
+    );
+    // 두 번째 교정만 선택해서 반영
+    checkboxes[0].checked = false;
+    checkboxes[1].checked = true;
+    textarea.value = initialText;
+    applyBtn.click();
+    expect(textarea.value).toBe(
+      "이것은 교정 전 내용1이고, 또 다른 교정 후 내용2가 있습니다."
+    );
+    // 둘 다 선택해서 반영
+    checkboxes[0].checked = true;
+    checkboxes[1].checked = true;
+    textarea.value = initialText;
+    applyBtn.click();
+    expect(textarea.value).toBe(
+      "이것은 교정 후 내용1이고, 또 다른 교정 후 내용2가 있습니다."
+    );
+  });
+});

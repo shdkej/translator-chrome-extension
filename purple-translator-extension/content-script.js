@@ -1,3 +1,21 @@
+function injectHighlightStyleToIframe(iframe) {
+  if (!iframe || !iframe.contentDocument) return;
+  const styleId = "ai-highlight-style";
+  if (iframe.contentDocument.getElementById(styleId)) return; // 이미 있으면 중복 삽입 방지
+  const style = iframe.contentDocument.createElement("style");
+  style.id = styleId;
+  style.textContent = `
+    .highlight {
+      background: yellow !important;
+      color: #222 !important;
+      border-radius: 2px;
+      padding: 0 2px;
+      box-shadow: 0 0 2px #ff0;
+    }
+  `;
+  iframe.contentDocument.head.appendChild(style);
+}
+
 function extractTitleAndBody() {
   // 제목은 input#title의 value에서 추출
   const title = document.querySelector("input#title")?.value || "";
@@ -26,91 +44,235 @@ function extractTitleAndBody() {
   return { title, body };
 }
 
-function highlightFeedbackInBody(feedback) {
-  const bodyDiv = document.querySelector(
-    ".wt-forms.writing-editor .wt-forms-content"
+function splitMarkdownByDashes(markdown) {
+  // --- 또는 빈 줄로 robust하게 분리
+  return markdown
+    .split(/(?:^|\n)---+\n/g)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+}
+
+function highlightCkeditorBody(feedback) {
+  if (!Array.isArray(feedback) || feedback.length === 0) return false;
+  const iframe = document.querySelector(
+    'iframe.cke_wysiwyg_frame[title*="FCKeditor1"]'
   );
-  if (!bodyDiv) return;
-  // 피드백 단어별로 빠른 lookup을 위해 맵 생성
-  const feedbackMap = {};
-  feedback.forEach((fb) => {
-    feedbackMap[fb.text] = fb.suggestion;
+  if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+    injectHighlightStyleToIframe(iframe);
+    let html = iframe.contentDocument.body.innerHTML;
+    feedback.forEach((fb) => {
+      const re = new RegExp(
+        fb.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "g"
+      );
+      html = html.replace(
+        re,
+        `<span class="highlight" title="제안: ${fb.suggestion || ""}">$&</span>`
+      );
+    });
+    iframe.contentDocument.body.innerHTML = html;
+    return true;
+  }
+  return false;
+}
+
+function observeAndHighlightCkeditorBody(feedback) {
+  if (highlightCkeditorBody(feedback)) return;
+  const observer = new MutationObserver(() => {
+    const found = highlightCkeditorBody(feedback);
+    if (found) observer.disconnect();
   });
-  // 텍스트 노드만 변환 (중첩 방지, 한 번에 모든 단어 처리)
-  function walk(node) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      let text = node.nodeValue;
-      // 피드백 단어 위치 모두 수집
-      let matches = [];
-      Object.keys(feedbackMap).forEach((word) => {
-        const re = new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
-        let m;
-        while ((m = re.exec(text)) !== null) {
-          matches.push({ start: m.index, end: m.index + word.length, word });
-        }
-      });
-      if (matches.length === 0) return;
-      // 겹침 방지: 시작순 정렬, 겹치는 부분은 앞의 것만
-      matches.sort((a, b) => a.start - b.start);
-      let filtered = [];
-      let lastEnd = 0;
-      for (let i = 0; i < matches.length; i++) {
-        if (matches[i].start >= lastEnd) {
-          filtered.push(matches[i]);
-          lastEnd = matches[i].end;
-        }
-      }
-      // 새 fragment 생성
-      const frag = document.createDocumentFragment();
-      let curr = 0;
-      filtered.forEach(({ start, end, word }) => {
-        if (curr < start) {
-          frag.appendChild(document.createTextNode(text.slice(curr, start)));
-        }
-        const span = document.createElement("span");
-        span.className = "highlight";
-        span.textContent = text.slice(start, end);
-        if (feedbackMap[word]) span.title = `제안: ${feedbackMap[word]}`;
-        frag.appendChild(span);
-        curr = end;
-      });
-      if (curr < text.length) {
-        frag.appendChild(document.createTextNode(text.slice(curr)));
-      }
-      node.parentNode.replaceChild(frag, node);
-    } else if (
-      node.nodeType === Node.ELEMENT_NODE &&
-      !node.classList.contains("highlight")
-    ) {
-      for (let i = node.childNodes.length - 1; i >= 0; i--) {
-        walk(node.childNodes[i]);
-      }
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+function highlightFeedbackInBody(feedback) {
+  observeAndHighlightCkeditorBody(feedback);
+}
+
+function waitForEditorAndSetBody(body, tries = 20) {
+  // 1. ekeditor(커스텀 에디터) 인스턴스가 있으면 공식 API로 반영
+  if (window.ekeditor && typeof window.ekeditor.setHtml === "function") {
+    console.log("[waitForEditorAndSetBody] ekeditor 사용");
+    window.ekeditor.setHtml(body);
+    return;
+  }
+  // 2. CKEditor 인스턴스가 있으면 공식 API로 반영 + iframe 내부도 직접 할당
+  if (
+    window.CKEDITOR &&
+    window.CKEDITOR.instances &&
+    window.CKEDITOR.instances.FCKeditor1
+  ) {
+    console.log("[waitForEditorAndSetBody] CKEDITOR 사용");
+    window.CKEDITOR.instances.FCKeditor1.setData(body);
+    // 혹시 setData만으로 안 바뀌면 iframe 내부도 직접 할당
+    const iframe = document.querySelector("iframe.cke_wysiwyg_frame");
+    if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+      iframe.contentDocument.body.innerHTML = body;
+    }
+    return;
+  }
+  // 3. 만약 이 프레임이 에디터의 진짜 본문(iframe 내부)라면
+  if (
+    document.body &&
+    document.body.classList.contains("cke_editable") &&
+    document.body.isContentEditable
+  ) {
+    console.log("[waitForEditorAndSetBody] 직접 body.innerHTML 할당");
+    document.body.innerHTML = body;
+    return;
+  }
+  // 4. 재시도
+  if (tries > 0) {
+    setTimeout(() => waitForEditorAndSetBody(body, tries - 1), 500);
+  } else {
+    // fallback: textarea
+    const textarea = document.getElementById("FCKeditor1");
+    if (textarea) {
+      console.log("[waitForEditorAndSetBody] fallback textarea");
+      textarea.value = body;
     }
   }
-  walk(bodyDiv);
 }
 
-if (typeof module === "object" && typeof module.exports === "object") {
-  module.exports = { extractTitleAndBody, highlightFeedbackInBody };
+function injectAppliedCorrectionStyleToIframe(iframe) {
+  if (!iframe || !iframe.contentDocument) return;
+  const styleId = "ai-applied-correction-style";
+  if (iframe.contentDocument.getElementById(styleId)) return;
+  const style = iframe.contentDocument.createElement("style");
+  style.id = styleId;
+  style.textContent = `
+    .applied-correction {
+      background: #b6fcb6 !important;
+      color: #155724 !important;
+      border-radius: 2px;
+      padding: 0 2px;
+      box-shadow: 0 0 2px #6f6;
+      font-weight: bold;
+    }
+  `;
+  iframe.contentDocument.head.appendChild(style);
 }
 
-// 메시지 리스너: popup 등에서 HIGHLIGHT_FEEDBACK 메시지를 받으면 하이라이트 실행
+function setCkeditorBodyFromParentReplace(corrections) {
+  if (!Array.isArray(corrections) || corrections.length === 0) return false;
+  const iframe = document.querySelector(
+    'iframe.cke_wysiwyg_frame[title*="FCKeditor1"]'
+  );
+  if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+    injectHighlightStyleToIframe(iframe);
+    injectAppliedCorrectionStyleToIframe(iframe);
+    let html = iframe.contentDocument.body.innerHTML;
+    corrections.forEach(({ before, after }) => {
+      const highlightedAfter = `<span class="applied-correction">${after}</span>`;
+      html = html.split(before).join(highlightedAfter);
+    });
+    iframe.contentDocument.body.innerHTML = html;
+    return true;
+  }
+  return false;
+}
+
+function observeAndReplaceCkeditorBody(corrections) {
+  // 이미 존재하면 바로 처리
+  if (setCkeditorBodyFromParentReplace(corrections)) return;
+  // 아니면 MutationObserver로 감시
+  const observer = new MutationObserver(() => {
+    const found = setCkeditorBodyFromParentReplace(corrections);
+    if (found) observer.disconnect();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+function setArticleBody(corrections) {
+  observeAndReplaceCkeditorBody(corrections);
+}
+
+function setArticleTitle(title) {
+  const input = document.querySelector("input#title");
+  if (input) {
+    input.value = title;
+  }
+}
+
+function handleApplyCorrection(payload) {
+  // payload가 배열이면 그대로, 아니면 빈 배열
+  console.log("1. payload", payload);
+  setArticleBody(payload.body);
+}
+
+function observeAndExtractTitleAndBody(callback) {
+  function tryExtract() {
+    const titleInput = document.querySelector("input#title");
+    const textarea = document.getElementById("FCKeditor1");
+    if (titleInput && textarea) {
+      callback({
+        title: titleInput.value,
+        body: textarea.value,
+      });
+      return true;
+    }
+    return false;
+  }
+  // 즉시 한 번 시도
+  if (tryExtract()) return;
+  // 아니면 MutationObserver로 감시
+  const observer = new MutationObserver(() => {
+    if (tryExtract()) observer.disconnect();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+function removeHighlightsFromCkeditor() {
+  const iframe = document.querySelector(
+    'iframe.cke_wysiwyg_frame[title*="FCKeditor1"]'
+  );
+  if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+    const doc = iframe.contentDocument;
+    // 모든 .highlight, .applied-correction span을 평문으로 교체
+    [
+      ...doc.querySelectorAll("span.highlight, span.applied-correction"),
+    ].forEach((span) => {
+      const text = span.textContent;
+      const parent = span.parentNode;
+      parent.replaceChild(doc.createTextNode(text), span);
+      parent.normalize(); // 인접 텍스트 노드 병합
+    });
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const saveBtn = document.querySelector("button.btn.btn-save");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", () => {
+      removeHighlightsFromCkeditor();
+    });
+  }
+});
+
+const messageHandlers = {
+  HIGHLIGHT_FEEDBACK: (message, sendResponse) => {
+    highlightFeedbackInBody(message.feedback);
+  },
+  GET_ARTICLE_CONTENT: (message, sendResponse) => {
+    observeAndExtractTitleAndBody(({ title, body }) => {
+      sendResponse({ title, body });
+    });
+    return true;
+  },
+  APPLY_CORRECTION: (message, sendResponse) => {
+    handleApplyCorrection(message.payload);
+    sendResponse && sendResponse({ ok: true });
+  },
+};
+
 if (
   typeof chrome !== "undefined" &&
   chrome.runtime &&
   chrome.runtime.onMessage
 ) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (
-      message.type === "HIGHLIGHT_FEEDBACK" &&
-      Array.isArray(message.feedback)
-    ) {
-      highlightFeedbackInBody(message.feedback);
-    }
-    if (message.type === "GET_ARTICLE_CONTENT") {
-      const { title, body } = extractTitleAndBody();
-      sendResponse({ title, body });
-      return true; // 비동기 응답 명시
+    if (message && message.type && messageHandlers[message.type]) {
+      return messageHandlers[message.type](message, sendResponse);
     }
   });
 }

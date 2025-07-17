@@ -94,10 +94,11 @@ const FULL_PROMPT = `
 - 반드시 기사 원문에 있는 내용만 충실히 번역하라.
 - 단순 번역이지만, 한국어 기사처럼 자연스럽고 매끄럽게 읽히도록 해라.
 - 만약 기사 정보가 없다면 기사 정보가 없다고 문자열을 반환해라.
+- 교정 내용에 마크다운의 문장 강조 표시는 넣지 마라.
 
 ** 반드시 지켜야 하는 규칙 Strict Rule! **
 ※ 일본 인명(한자)을 일본식 발음 기준의 한국어 표기(예: 中居正広의 경우 나카이 마사히로, 石破茂의 경우, 이시바 시게루) 로 표기해줘
-※ 제목과 본문에 일본 기사에 등장하는 고유명사(예: 시설명, 작품명, 건축물 등) 를 한국어 뜻(일본어 원문) (예: 太陽の塔 → 태양의 탑(太陽의 탑)) 형식으로 표기해줘. 위치는 필요없어
+※ 제목과 본문에 일본 기사에 등장하는 고유명사(예: 시설명, 작품명, 건축물 등) 를 한국어 뜻(일본어 원문) (예: 太陽의塔 → 태양의 탑(太陽의 탑)) 형식으로 표기해줘. 위치는 필요없어
 `;
 
 function fetchArticleContentFromContentScript(callback) {
@@ -123,7 +124,122 @@ function fillTextareaWithArticle(title, body) {
   }
 }
 
+function splitMarkdownByDashes(markdown) {
+  // --- 또는 빈 줄로 robust하게 분리
+  return markdown
+    .split(/(?:^|\n)---+\n/g)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0);
+}
+
+function parseCorrectionsFromMarkdown(markdown) {
+  // 각 항목을 블록 단위로 분리 (--- 또는 빈 줄로 구분)
+  const blocks = markdown
+    .split(/(?:^|\n)---+\n/g) // ---로 구분
+    .map((block) => block.trim())
+    .filter(
+      (block) => block && /교정 전:/.test(block) && /교정 후:/.test(block)
+    );
+
+  const corrections = [];
+  for (const block of blocks) {
+    // 각 항목에서 교정 전/후/이유 추출
+    const beforeMatch = block.match(/- ?교정 전:\s*(.+)/);
+    const afterMatch = block.match(/- ?교정 후:\s*(.+)/);
+    // 이유는 마지막에 있을 수 있으므로 [^\n]+ 대신 .+로
+    const reasonMatch = block.match(/- ?이유:\s*(.+)/);
+
+    if (beforeMatch && afterMatch) {
+      corrections.push({
+        before: beforeMatch[1].trim(),
+        after: afterMatch[1].trim(),
+        reason: reasonMatch ? reasonMatch[1].trim() : "",
+      });
+    }
+  }
+  // blocks 배열도 함께 반환하거나 활용 가능
+  // 예: return { corrections, blocks };
+  return corrections;
+}
+
+function showCorrectionsUI(corrections, markdown) {
+  const container = document.getElementById("correction-ui");
+  if (!container) return;
+  const correctionsHtml = `
+    <div style="margin-bottom:8px;font-weight:bold;">교정 항목을 선택하고 '반영하기'를 누르세요</div>
+    <div id="correction-checkbox-list" style="margin-bottom:8px;">
+      ${corrections
+        .map(
+          (c, i) =>
+            `<label><input type="checkbox" data-idx="${i}" />${c.before} → ${c.after}</label><br />`
+        )
+        .join("")}
+    </div>
+    <button id="apply-corrections-btn">반영하기</button>
+    <button id="toggle-md-btn" style="margin-left:8px;">원본 교정 결과 보기</button>
+    <div id="correction-md-view" style="display:none;margin-top:12px;"></div>
+    <div id="apply-msg" style="color:green;margin-top:8px;display:none;">반영 완료!</div>
+  `;
+  container.innerHTML = correctionsHtml;
+  // textarea에 기사 원문 자동 채우기 (이전 값이 있으면 그대로)
+  const textarea = document.querySelector("textarea");
+  if (textarea && !textarea.value) {
+    fetchArticleContentFromContentScript((title, body) => {
+      textarea.value = `${title}\n${body}`;
+    });
+  }
+  // 반영하기 버튼 핸들러
+  const applyBtn = document.getElementById("apply-corrections-btn");
+  if (applyBtn) {
+    applyBtn.onclick = () => {
+      let value = textarea.value;
+      const checkboxes = document.querySelectorAll(
+        "#correction-checkbox-list input[type='checkbox']"
+      );
+      // 선택된 교정만 배열로 추출
+      const selectedCorrections = corrections.filter(
+        (cor, idx) => checkboxes[idx].checked
+      );
+      // 본문 치환 (textarea에도 반영)
+      selectedCorrections.forEach(({ before, after }) => {
+        value = value.replaceAll(before, after);
+      });
+      textarea.value = value;
+      // 실제 기사 입력창에 반영 (선택된 corrections 배열 전달)
+      sendCorrectionToContentScript(selectedCorrections);
+      // 반영 완료 메시지 표시
+      const msg = document.getElementById("apply-msg");
+      msg.style.display = "block";
+      setTimeout(() => {
+        msg.style.display = "none";
+      }, 1000);
+    };
+  }
+  // 마크다운 토글 버튼
+  const toggleBtn = document.getElementById("toggle-md-btn");
+  const mdView = document.getElementById("correction-md-view");
+  if (toggleBtn && mdView) {
+    toggleBtn.onclick = () => {
+      if (mdView.style.display === "none") {
+        mdView.style.display = "block";
+        mdView.innerHTML = window.marked.parse(markdown || "");
+      } else {
+        mdView.style.display = "none";
+      }
+    };
+  }
+}
+
 function setCorrectionResult(markdown, isSave = true) {
+  const corrections = parseCorrectionsFromMarkdown(markdown);
+  const blocks = splitMarkdownByDashes(markdown);
+  console.log("blocks (---로 분리):", blocks);
+  if (corrections.length > 0) {
+    showCorrectionsUI(corrections, markdown);
+    // 예시: blocks 배열을 하이라이트 메시지로 보내고 싶다면
+    // sendHighlightToContentScript(blocks);
+    return;
+  }
   const resultDiv = document.getElementById("ai-result");
   resultDiv.innerHTML = window.marked.parse(markdown);
   // 결과를 chrome.storage.local에 저장
@@ -181,7 +297,6 @@ ${userInput}
       ],
     }),
   });
-  console.log({ userInput });
   if (!res.ok) throw new Error("API Error");
   const json = await res.json();
   return json.choices?.[0]?.message?.content || "";
@@ -195,6 +310,19 @@ function getApiKey(cb) {
 
 // 하이라이트 메시지 전송 함수
 function sendHighlightToContentScript(feedback) {
+  // feedback이 배열이 아니면 splitMarkdownByDashes로 블록 배열로 변환 후 객체로 파싱
+  let feedbackArr = feedback;
+  if (!Array.isArray(feedback)) {
+    feedbackArr = splitMarkdownByDashes(feedback).map((block) => {
+      const textMatch = block.match(/-? ?교정 전:\s*(.+)/);
+      const suggestionMatch = block.match(/-? ?교정 후:\s*(.+)/);
+      return {
+        text: textMatch ? textMatch[1].trim() : block.trim(),
+        suggestion: suggestionMatch ? suggestionMatch[1].trim() : "",
+      };
+    });
+  }
+  if (!Array.isArray(feedbackArr)) return;
   if (!chrome.tabs || !chrome.tabs.query || !chrome.tabs.sendMessage) return;
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs && tabs[0]) {
@@ -202,7 +330,7 @@ function sendHighlightToContentScript(feedback) {
         tabs[0].id,
         {
           type: "HIGHLIGHT_FEEDBACK",
-          feedback,
+          feedback: feedbackArr,
         },
         (response) => {
           if (chrome.runtime.lastError) {
@@ -236,14 +364,9 @@ function callAI() {
       showArticlePreview(value);
       console.log("[AI 교정] fetchOpenAICorrection 시작");
       const result = await fetchOpenAICorrection(apiKey, FULL_PROMPT, value);
-      console.log("[AI 교정] fetchOpenAICorrection 성공", result);
+      console.log("[AI 교정] fetchOpenAICorrection 성공");
       setCorrectionResult(result);
-      try {
-        const parsed = JSON.parse(result);
-        if (Array.isArray(parsed.highlights)) {
-          sendHighlightToContentScript(parsed.highlights);
-        }
-      } catch {}
+      sendHighlightToContentScript(result);
     } catch (e) {
       console.log("[AI 교정] fetchOpenAICorrection 실패", e);
       setCorrectionResult("[AI 교정] fetchOpenAICorrection 실패");
@@ -253,7 +376,6 @@ function callAI() {
 
 function handleCorrectionButton(options) {
   const button = document.getElementById("correction-btn");
-  console.log(" button exist test");
   if (!button) return;
   if (options.onCorrection) {
     button.onclick = options.onCorrection;
@@ -265,11 +387,35 @@ function handleCorrectionButton(options) {
   }
 }
 
+function sendCorrectionToContentScript(body, title) {
+  console.log("1. send in popup", body);
+  if (
+    window.chrome &&
+    chrome.tabs &&
+    chrome.tabs.query &&
+    chrome.tabs.sendMessage
+  ) {
+    console.log("2. in if");
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      console.log("3. in query");
+      if (tabs && tabs[0]) {
+        console.log("4. its done");
+        chrome.tabs.sendMessage(
+          tabs[0].id,
+          { type: "APPLY_CORRECTION", payload: { body, title } },
+          () => {}
+        );
+      }
+    });
+  }
+}
+
 function renderPopup(options = {}) {
   const root = document.getElementById("popup-root");
   root.innerHTML = `
     <div>
       <textarea></textarea>
+      <div id="correction-ui"></div>
       <div class="ai-btn-row">
         <button class="ai-btn" id="correction-btn">AI 교정 요청</button>
         <button class="ai-btn ai-retry green" id="ai-retry-btn">재검토</button>

@@ -347,4 +347,43 @@ describe("Correction apply integration", () => {
       "이것은 교정 후 내용1이고, 또 다른 교정 후 내용2가 있습니다."
     );
   });
+
+  it("should send APPLY_CORRECTION message to content script with corrected body when '반영하기' is clicked", () => {
+    // Arrange: textarea에 교정 전 텍스트가 있음
+    const initialText =
+      "이것은 교정 전 내용1이고, 또 다른 교정 전 내용2가 있습니다.";
+    const corrections = [
+      { before: "교정 전 내용1", after: "교정 후 내용1" },
+      { before: "교정 전 내용2", after: "교정 후 내용2" },
+    ];
+    // chrome.tabs.sendMessage mock
+    global.chrome = {
+      tabs: {
+        query: jest.fn((query, cb) => cb([{ id: 123 }])),
+        sendMessage: jest.fn(),
+      },
+    };
+    const { renderPopup } = require("./popup");
+    renderPopup({ corrections });
+    // textarea에 초기값 세팅
+    const textarea = document.querySelector("textarea");
+    textarea.value = initialText;
+    // 첫 번째 교정만 선택
+    const checkboxes = document.querySelectorAll("input[type='checkbox']");
+    checkboxes[0].checked = true;
+    checkboxes[1].checked = false;
+    // '반영하기' 버튼 클릭
+    const applyBtn = document.getElementById("apply-corrections-btn");
+    applyBtn.click();
+    // chrome.tabs.sendMessage가 올바른 payload로 호출됐는지 확인
+    expect(global.chrome.tabs.sendMessage).toHaveBeenCalledWith(
+      123,
+      {
+        type: "APPLY_CORRECTION",
+        correctedBody:
+          "이것은 교정 후 내용1이고, 또 다른 교정 전 내용2가 있습니다.",
+      },
+      expect.any(Function)
+    );
+  });
 });

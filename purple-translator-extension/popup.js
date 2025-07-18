@@ -95,6 +95,8 @@ const FULL_PROMPT = `
 - 단순 번역이지만, 한국어 기사처럼 자연스럽고 매끄럽게 읽히도록 해라.
 - 만약 기사 정보가 없다면 기사 정보가 없다고 문자열을 반환해라.
 - 교정 내용에 마크다운의 문장 강조 표시는 넣지 마라.
+- 따로 수정할 필요가 없다면 언급하지 마라.
+- HTML은 무시해라
 
 ** 반드시 지켜야 하는 규칙 Strict Rule! **
 ※ 일본 인명(한자)을 일본식 발음 기준의 한국어 표기(예: 中居正広의 경우 나카이 마사히로, 石破茂의 경우, 이시바 시게루) 로 표기해줘
@@ -162,21 +164,56 @@ function parseCorrectionsFromMarkdown(markdown) {
   return corrections;
 }
 
-function showCorrectionsUI(corrections, markdown) {
+function showCorrectionsUI(corrections, markdown, checkedStates = []) {
   const container = document.getElementById("correction-ui");
   if (!container) return;
+  container.style.display = "";
+  // 버튼 스타일 클래스 정의 (최초 1회만 추가)
+  if (!document.getElementById("ai-btn-style")) {
+    const style = document.createElement("style");
+    style.id = "ai-btn-style";
+    style.textContent = `
+      .ai-btn-blue { background: #3b82f6 !important; color: #fff !important; border: none !important; }
+      .ai-btn-blue:hover { background: #2563eb !important; }
+      .ai-btn-gray { background: #e5e7eb !important; color: #222 !important; border: none !important; }
+      .ai-btn-gray:hover { background: #d1d5db !important; }
+    `;
+    document.head.appendChild(style);
+  }
   const correctionsHtml = `
     <div style="margin-bottom:8px;font-weight:bold;">교정 항목을 선택하고 '반영하기'를 누르세요</div>
-    <div id="correction-checkbox-list" style="margin-bottom:8px;">
+    <div class="ai-result" id="correction-checkbox-list" style="margin-bottom:8px;">
       ${corrections
         .map(
           (c, i) =>
-            `<label><input type="checkbox" data-idx="${i}" />${c.before} → ${c.after}</label><br />`
+            `<div class="correction-block" style="display:flex;align-items:flex-start;margin-bottom:8px;">
+              <input type="checkbox" data-idx="${i}" style="margin-right:8px;" ${
+              checkedStates[i] ? "checked" : ""
+            } />
+              <div class="correction-content" style="flex:1;">
+                ${
+                  c.title
+                    ? `<div style='font-weight:bold;'>${c.title}</div>`
+                    : ""
+                }
+                <div><b>교정 전:</b> ${c.before}</div>
+                <div><b>교정 후:</b> ${c.after}</div>
+                ${
+                  c.reason
+                    ? `<div style='color:#888;'><b>이유:</b> ${c.reason}</div>`
+                    : ""
+                }
+              </div>
+            </div>`
         )
         .join("")}
     </div>
-    <button id="apply-corrections-btn">반영하기</button>
-    <button id="toggle-md-btn" style="margin-left:8px;">원본 교정 결과 보기</button>
+    <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+      <button class="ai-btn ai-btn-blue" id="apply-corrections-btn" style="font-size:13px;padding:4px 10px;">반영하기</button>
+      <button class="ai-btn" id="select-all-corrections-btn" type="button" style="font-size:13px;padding:4px 10px;">전체 선택</button>
+      <button class="ai-btn" id="deselect-all-corrections-btn" type="button" style="font-size:13px;padding:4px 10px;">전체 해제</button>
+      <button class="ai-btn ai-btn-gray" id="toggle-md-btn" style="font-size:13px;padding:4px 10px;margin-left:auto;">원본 교정 결과 보기</button>
+    </div>
     <div id="correction-md-view" style="display:none;margin-top:12px;"></div>
     <div id="apply-msg" style="color:green;margin-top:8px;display:none;">반영 완료!</div>
   `;
@@ -188,14 +225,45 @@ function showCorrectionsUI(corrections, markdown) {
       textarea.value = `${title}\n${body}`;
     });
   }
+  // 전체 선택/해제 버튼 핸들러
+  const selectAllBtn = document.getElementById("select-all-corrections-btn");
+  const deselectAllBtn = document.getElementById(
+    "deselect-all-corrections-btn"
+  );
+  const checkboxList = () =>
+    document.querySelectorAll(
+      "#correction-checkbox-list input[type='checkbox']"
+    );
+  if (selectAllBtn) {
+    selectAllBtn.onclick = () => {
+      checkboxList().forEach((cb) => {
+        cb.checked = true;
+      });
+      saveCheckedStates();
+    };
+  }
+  if (deselectAllBtn) {
+    deselectAllBtn.onclick = () => {
+      checkboxList().forEach((cb) => {
+        cb.checked = false;
+      });
+      saveCheckedStates();
+    };
+  }
+  // 체크박스 변경 시 상태 저장
+  function saveCheckedStates() {
+    const checkedArray = Array.from(checkboxList()).map((cb) => cb.checked);
+    chrome.storage.local.set({ lastCorrectionChecked: checkedArray });
+  }
+  checkboxList().forEach((cb) => {
+    cb.addEventListener("change", saveCheckedStates);
+  });
   // 반영하기 버튼 핸들러
   const applyBtn = document.getElementById("apply-corrections-btn");
   if (applyBtn) {
     applyBtn.onclick = () => {
       let value = textarea.value;
-      const checkboxes = document.querySelectorAll(
-        "#correction-checkbox-list input[type='checkbox']"
-      );
+      const checkboxes = checkboxList();
       // 선택된 교정만 배열로 추출
       const selectedCorrections = corrections.filter(
         (cor, idx) => checkboxes[idx].checked
@@ -228,21 +296,33 @@ function showCorrectionsUI(corrections, markdown) {
       }
     };
   }
+  // 교정 리스트와 체크 상태를 항상 저장
+  chrome.storage.local.set({ lastCorrectionResult: markdown });
+  saveCheckedStates();
 }
 
-function setCorrectionResult(markdown, isSave = true) {
+function setCorrectionResult(markdown, isSave = true, checkedStates = []) {
   const corrections = parseCorrectionsFromMarkdown(markdown);
   const blocks = splitMarkdownByDashes(markdown);
   console.log("blocks (---로 분리):", blocks);
-  if (corrections.length > 0) {
-    showCorrectionsUI(corrections, markdown);
-    // 예시: blocks 배열을 하이라이트 메시지로 보내고 싶다면
-    // sendHighlightToContentScript(blocks);
+  const container = document.getElementById("correction-ui");
+  // 로딩중일 때는 교정리스트 숨김
+  if (typeof markdown === "string" && markdown.trim().includes("로딩중")) {
+    if (container) container.innerHTML = "";
+    const resultDiv = document.getElementById("ai-result");
+    if (resultDiv)
+      resultDiv.innerHTML =
+        "<div style='text-align:center;padding:24px 0;'>로딩중...</div>";
     return;
   }
+  if (corrections.length > 0) {
+    if (container) container.style.display = "";
+    showCorrectionsUI(corrections, markdown, checkedStates);
+    return;
+  }
+  if (container) container.innerHTML = "";
   const resultDiv = document.getElementById("ai-result");
   resultDiv.innerHTML = window.marked.parse(markdown);
-  // 결과를 chrome.storage.local에 저장
   if (isSave && chrome && chrome.storage && chrome.storage.local) {
     chrome.storage.local.set({ lastCorrectionResult: markdown });
   }
@@ -414,12 +494,12 @@ function renderPopup(options = {}) {
   const root = document.getElementById("popup-root");
   root.innerHTML = `
     <div>
-      <textarea></textarea>
-      <div id="correction-ui"></div>
-      <div class="ai-btn-row">
+      <div class="ai-btn-row" style="margin-bottom:12px;">
         <button class="ai-btn" id="correction-btn">AI 교정 요청</button>
         <button class="ai-btn ai-retry green" id="ai-retry-btn">재검토</button>
       </div>
+      <textarea></textarea>
+      <div id="correction-ui"></div>
       <div id="ai-result"></div>
       <div class="article-preview" id="article-preview">텍스트 입력창에 교정할 내용을 넣고 버튼을 눌러도 됩니다.</div>
     </div>
@@ -454,14 +534,21 @@ if (typeof module === "object" && typeof module.exports === "object") {
   };
 }
 
-// 팝업이 열릴 때 마지막 교정 결과 복원
+// 팝업이 열릴 때 마지막 교정 결과와 체크 상태 복원
 if (chrome && chrome.storage && chrome.storage.local) {
   document.addEventListener("DOMContentLoaded", () => {
-    chrome.storage.local.get(["lastCorrectionResult"], (result) => {
-      if (result && result.lastCorrectionResult) {
-        setCorrectionResult(result.lastCorrectionResult);
+    chrome.storage.local.get(
+      ["lastCorrectionResult", "lastCorrectionChecked"],
+      (result) => {
+        if (result && result.lastCorrectionResult) {
+          setCorrectionResult(
+            result.lastCorrectionResult,
+            false,
+            result.lastCorrectionChecked || []
+          );
+        }
       }
-    });
+    );
   });
 }
 
